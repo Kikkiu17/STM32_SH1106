@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "stddef.h"
 #include "font.h"
+#include "string.h"
 
 #define DISPLAY_ADDR 0x78	// 0x3C << 1
 #define OLED_WIDTH 132		// screen is 128px wide but RAM has 132 columns

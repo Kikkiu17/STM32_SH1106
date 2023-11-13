@@ -7,7 +7,6 @@
 
 #include "sh1106.h"
 #include "stm32f1xx_hal.h"
-#include "string.h"
 #include "stdlib.h"
 
 extern I2C_HandleTypeDef hi2c1;
@@ -15,6 +14,7 @@ extern I2C_HandleTypeDef hi2c1;
 uint8_t buf[2];
 uint8_t SH1106_Buffer[OLED_HEIGHT/8][OLED_WIDTH];
 uint8_t ram_page = 0;
+char time[5];
 
 
 /*//////////////////////////// DISPLAY FUNCTIONS \\\\\\\\\\\\\\\\\\\\\\\\\\\\*/
@@ -229,14 +229,15 @@ void SH1106_WriteCharsPageMode(char *chars, size_t size, FONT_INFO font, int8_t 
 
 	for (uint32_t k = 0; k < size; k++)
 	{
+		if (chars[k] - font.start_char > font.end_char - font.start_char)
+			continue;
 		char_position = font.descriptors[chars[k] - font.start_char].offset;
 		char_width = font.descriptors[chars[k] - font.start_char].width;
 
 		if (chars[k] == ' ')
 		{
-			// index would go past the end of the array, so stop the execution
 			if (horizontal_pos + space_character_width >= OLED_WIDTH)
-				break;
+				break;	// index would go past the end of the array, so stop the execution
 
 			for (uint32_t j = 0; j < font.height; j++)
 			{
@@ -248,9 +249,8 @@ void SH1106_WriteCharsPageMode(char *chars, size_t size, FONT_INFO font, int8_t 
 			continue;
 		}
 
-		// index would go past the end of the array, so stop the execution
 		if (horizontal_pos + char_width + (k == size - 1) ? 0 : separation >= OLED_WIDTH)
-			break;
+			break;	// index would go past the end of the array, so stop the execution
 
 		for (uint32_t j = 0; j < font.height; j++)
 		{
@@ -307,6 +307,8 @@ void SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_INFO
 			continue;
 		}
 
+		if (chars[k] - font.start_char > font.end_char - font.start_char)
+			continue;
 		char_position = font.descriptors[chars[k] - font.start_char].offset;
 		char_width = font.descriptors[chars[k] - font.start_char].width;
 
