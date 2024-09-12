@@ -8,25 +8,40 @@
 #include "sh1106.h"
 #include "stm32f1xx_hal.h"
 #include "stdlib.h"
+#include <string.h>
+#include "math.h"
 
 extern I2C_HandleTypeDef hi2c1;
 
+#define I2C_DELAY 100
+
 uint8_t buf[2];
 uint8_t SH1106_Buffer[OLED_HEIGHT/8][OLED_WIDTH];
+uint8_t new_write_buffer[OLED_HEIGHT/8][OLED_WIDTH];
 uint8_t ram_page = 0;
-char time[5];
+
+bool enable_screen_update = true;
+bool enable_high_speed = false;
+
+struct
+{
+	uint8_t start_x;
+	uint8_t start_y;
+	uint8_t end_x;
+	uint8_t end_y;
+} last_text_data;
 
 
 /*//////////////////////////// DISPLAY FUNCTIONS \\\\\\\\\\\\\\\\\\\\\\\\\\\\*/
 void SH1106_WriteData(uint8_t *data, size_t size)
 {
-	HAL_I2C_Mem_Write(&hi2c1, DISPLAY_ADDR, 0x40, 1, data, size, HAL_MAX_DELAY);
+	HAL_I2C_Mem_Write(&hi2c1, DISPLAY_ADDR, 0x40, 1, data, size, I2C_DELAY);
 }
 
 
 void SH1106_WriteCmdSingle(uint8_t cmd)
 {
-	HAL_I2C_Mem_Write(&hi2c1, DISPLAY_ADDR, 0x00, 1, &cmd, 1, HAL_MAX_DELAY);
+	HAL_I2C_Mem_Write(&hi2c1, DISPLAY_ADDR, 0x00, 1, &cmd, 1, I2C_DELAY);
 }
 
 
@@ -34,14 +49,100 @@ void SH1106_WriteCmdDouble(uint8_t cmd, uint8_t data)
 {
 	buf[0] = cmd;
 	buf[1] = data;
-	HAL_I2C_Mem_Write(&hi2c1, DISPLAY_ADDR, 0x00, 1, buf, 2, HAL_MAX_DELAY);
+	HAL_I2C_Mem_Write(&hi2c1, DISPLAY_ADDR, 0x00, 1, buf, 2, I2C_DELAY);
 }
 
 
-void SH1106_UpdateScreen(void)
+// leave all fields 0 to update the entire screen
+void SH1106_WriteBufferChanges(uint8_t start_x, uint8_t start_y, uint8_t end_x, uint8_t end_y, bool erase_last_write)
+{
+	if (!enable_high_speed)
+	{
+		SH1106_UpdateEntireFrame();
+		last_text_data.start_x = start_x;
+		last_text_data.start_y = start_y;
+		last_text_data.end_x = end_x;
+		last_text_data.end_y = end_y;
+		for (uint32_t i = 0; i < OLED_HEIGHT / 8; i++)
+			memset(new_write_buffer[i], 0x00, OLED_WIDTH);
+		return;
+	}
+
+	if (end_x == 0 || end_y == 0)
+		return;
+	else
+	{
+		// pixels in RAM are shifted left by 2
+		start_x += 2;
+		end_x += 2;
+
+		const uint8_t start_y_page = start_y / 8;
+		const uint8_t end_y_page = end_y / 8;
+
+		const uint8_t to_shift_start = start_y - start_y_page * 8;
+		const uint8_t non_usable_bits_start = 0xFF >> (8 - to_shift_start);
+		const uint8_t usable_bits_start = 0xFF << to_shift_start;
+
+		const uint8_t to_shift_end = 8 - (end_y - end_y_page * 8);
+		const uint8_t non_usable_bits_end = 0xFF << (8 - to_shift_end);
+		const uint8_t usable_bits_end = 0xFF >> to_shift_end;
+
+		for (uint8_t page_i = start_y_page; page_i < ((end_y > last_text_data.end_y) ? end_y_page + 1 : last_text_data.end_y / 8 + 1); page_i++)
+		{
+			if (erase_last_write)
+				memset(SH1106_Buffer[page_i], 0x00, last_text_data.end_x);
+
+			for (uint8_t col = start_x; col < end_x; col++)
+			{
+				// do not overwrite pixels of the entire page, only use the needed ones
+				// for example, if these bits are written: 11100110
+				// but we have to only write: 1010 on the bottom part of the page,
+				// the result would be this: 10100110 -- the lower 4 bits are kept
+
+				if (page_i == start_y_page)
+				{
+					SH1106_Buffer[page_i][col] = (new_write_buffer[page_i][col] & usable_bits_start) |
+							(SH1106_Buffer[page_i][col] & non_usable_bits_start);
+
+					continue;
+				}
+				else if (page_i == end_y_page)
+				{
+					SH1106_Buffer[page_i][col] = (new_write_buffer[page_i][col] & usable_bits_end) |
+							(SH1106_Buffer[page_i][col] & non_usable_bits_end);
+
+					continue;
+				}
+
+				SH1106_Buffer[page_i][col] = new_write_buffer[page_i][col];
+			}
+
+			SH1106_WriteCmdSingle(0xB0 + page_i);	// page select
+			SH1106_WriteCmdSingle(0x10 | (start_x >> 4));		// reset horizontal position (upper bits)
+			SH1106_WriteCmdSingle(start_x & 0x0F);		// reset horizontal position (lower bits)
+			//SH1106_WriteCmdSingle(0x10);
+			//SH1106_WriteCmdSingle(0x00);
+			// write only part of the page. this adds a huge performance advantage
+			SH1106_WriteData(SH1106_Buffer[page_i] + start_x,
+					(end_x > last_text_data.end_x) ? end_x : last_text_data.end_x);
+		}
+	}
+
+	last_text_data.start_x = start_x;
+	last_text_data.start_y = start_y;
+	last_text_data.end_x = end_x;
+	last_text_data.end_y = end_y;
+	for (uint32_t i = 0; i < OLED_HEIGHT / 8; i++)
+		memset(new_write_buffer[i], 0x00, OLED_WIDTH);
+}
+
+
+void SH1106_UpdateEntireFrame(void)
 {
 	for (uint8_t i = 0; i < OLED_HEIGHT / 8; i++)
 	{
+		if (enable_high_speed)
+			memmove(SH1106_Buffer[i], new_write_buffer[i], OLED_WIDTH);
 		SH1106_WriteCmdSingle(0xB0 + i);	// page select
 		SH1106_WriteCmdSingle(0x00);		// reset horizontal position (lower bits)
 		SH1106_WriteCmdSingle(0x10);		// reset horizontal position (upper bits)
@@ -50,11 +151,20 @@ void SH1106_UpdateScreen(void)
 }
 
 
+void SH1106_SetHighSpeedUpdate(bool state)
+{
+	enable_high_speed = state;
+}
+
+
 void SH1106_ClearScreen(void)
 {
 	for (uint32_t i = 0; i < OLED_HEIGHT / 8; i++)
+	{
 		memset(SH1106_Buffer[i], 0, OLED_WIDTH);
-	SH1106_UpdateScreen();
+		memset(new_write_buffer[i], 0, OLED_WIDTH);
+	}
+	SH1106_UpdateEntireFrame();
 }
 
 
@@ -70,16 +180,54 @@ void SH1106_DisplayON(void)
 }
 
 
+void SH1106_EnterSleepMode(void)
+{
+	SH1106_DisplayOFF();
+	SH1106_WriteCmdDouble(0xAD, 0x8A);
+}
+
+
+void SH1106_ExitSleepMode(void)
+{
+	SH1106_DisplayOFF();	// panel must be off before issuing 0xAD command
+	SH1106_WriteCmdDouble(0xAD, 0x8B);
+	SH1106_DisplayON();
+}
+
+
 /*//////////////////////////// GRAPHICS FUNCTIONS \\\\\\\\\\\\\\\\\\\\\\\\\\\\*/
+void SH1106_SetScreenAutoUpdate(bool state)
+{
+	enable_screen_update = state;
+}
+
+
+void SH1106_FillScreen(uint8_t color)
+{
+	SH1106_DrawRect(0, 0, 128, 64, color, 0, 0);
+}
+
+
+// needs if (enable_screen_update) SH1106_WriteBufferChanges() after
 uint8_t SH1106_DrawPixel(uint8_t x, uint8_t y, SH1106_COLOR color)
 {
 	x += 2;
 	if (x >= OLED_WIDTH || y >= OLED_HEIGHT)
 		return 0;
 	if (color == BLUE)
-		SH1106_Buffer[y / 8][x] |= 0x01 << (y % 8);
+	{
+		if (enable_high_speed)
+			new_write_buffer[y / 8][x] |= 0x01 << (y % 8);
+		else
+			SH1106_Buffer[y / 8][x] |= 0x01 << (y % 8);
+	}
 	else
-		SH1106_Buffer[y / 8][x] &= ~(0x01 << (y % 8));
+	{
+		if (enable_high_speed)
+			new_write_buffer[y / 8][x] &= ~(0x01 << (y % 8));
+		else
+			SH1106_Buffer[y / 8][x] &= ~(0x01 << (y % 8));
+	}
 	return 1;
 }
 
@@ -99,17 +247,23 @@ uint8_t SH1106_DrawByte(uint8_t x, uint8_t y, uint8_t byte, SH1106_COLOR color)
 }
 
 
-uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, SH1106_COLOR color)
+uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, SH1106_COLOR color, bool erase_last_write, bool update_screen)
 {
+	if (x1 < 0 || width <= 0 || y1 < 0 || height <= 0)
+		return 0;
+
+	if (x1 > OLED_WIDTH || x1 + width > OLED_WIDTH || y1 > OLED_HEIGHT || y1 + height > OLED_HEIGHT)
+		return 0;
+
+	uint8_t x2 = x1 + width;
+	uint8_t y2 = y1 + height;
+
 	uint8_t pixel_x = x1;
 	uint8_t pixel_y = y1;
 
-	if (x1 < 0 || x2 < 0 || y1 < 0 || y2 < 0 || x1 > OLED_WIDTH || x2 > OLED_WIDTH || y1 > OLED_HEIGHT || y2 > OLED_HEIGHT)
-		return 0;
-
-	for (uint32_t i = 0; i <= abs(y2 - y1); i++)
+	for (uint32_t i = 0; i < height; i++)
 	{
-		for (uint32_t j = 0; j <= abs(x2- x1); j++)
+		for (uint32_t j = 0; j < width; j++)
 		{
 			SH1106_DrawPixel(pixel_x, pixel_y, color);
 			pixel_x++;
@@ -119,31 +273,36 @@ uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, SH1106_C
 		pixel_x = x1;
 	}
 
-	SH1106_UpdateScreen();
+	if (enable_screen_update && update_screen) SH1106_WriteBufferChanges(x1, y1, x2, y2, erase_last_write);
 	return 1;
 }
 
 
-uint8_t SH1106_DrawHollowRect(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, SH1106_COLOR color)
+uint8_t SH1106_DrawHollowRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, uint8_t thickness, SH1106_COLOR color, bool erase_last_write)
 {
-	if (x1 < 0 || x2 < 0 || y1 < 0 || y2 < 0 || x1 > OLED_WIDTH || x2 > OLED_WIDTH || y1 > OLED_HEIGHT || y2 > OLED_HEIGHT)
+	if (x1 < 0 || width <= 0 || y1 < 0 || height <= 0 || thickness <= 0)
 		return 0;
+
+	if (x1 > OLED_WIDTH || x1 + width > OLED_WIDTH || y1 > OLED_HEIGHT || y1 + height > OLED_HEIGHT)
+		return 0;
+
+	uint8_t x2 = x1 + width - 1;
+	uint8_t y2 = y1 + height - 1;
 
 	for (uint32_t i = 0; i < thickness; i++)
 	{
-		SH1106_DrawLine(x1, y1 + i, x2, y1 + i, 1, 0, color);
-		SH1106_DrawLine(x1 + i, y1, x1 + i, y2, 1, 0, color);
-		SH1106_DrawLine(x1, y2 - i, x2, y2 - i, 1, 0, color);
-		SH1106_DrawLine(x2 - i, y1, x2 - i, y2, 1, 0, color);
+		SH1106_DrawLine(x1, y1 + i, x2, y1 + i, 1, 0, color, 0);
+		SH1106_DrawLine(x1 + i, y1, x1 + i, y2, 1, 0, color, 0);
+		SH1106_DrawLine(x1, y2 - i, x2, y2 - i, 1, 0, color, 0);
+		SH1106_DrawLine(x2 - i, y1, x2 - i, y2, 1, 0, color, 0);
 	}
 
-	SH1106_UpdateScreen();
-
+	if (enable_screen_update) SH1106_WriteBufferChanges(x1, y1, x2 + 1, y2 + 1, erase_last_write);
 	return 1;
 }
 
 
-uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, uint8_t update_screen, SH1106_COLOR color)
+uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, bool update_screen, SH1106_COLOR color, bool erase_last_write)
 {
 	int8_t dx = abs(x2 - x1);
 	int8_t dy = abs(y2 - y1);
@@ -177,182 +336,152 @@ uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t 
 	{
 		err -= es;
 
-		if (err < 0) {
+		if (err < 0)
+		{
 			err += el;
 			x += incx;
 			y += incy;
-		} else {
+		}
+		else
+		{
 			x += pdx;
 			y += pdy;
 		}
 
 		for (int8_t i = 0; i < thickness; i++)
 		{
-			if (x >= 0 && x <= 127 && y >= 0 && y <= 63)
+			if (x >= 0 && x < 128 && y >= 0 && y < 64)
 			{
 				SH1106_DrawPixel(x, y, color);
 
 				for (int8_t j = 1; j <= thickness / 2; j++)
 				{
-					if (x + j * pdy >= 0 && x + j * pdy <= OLED_WIDTH && y - j * pdx >= 0 && y - j * pdx <= OLED_HEIGHT)
+					if (x + j * pdy >= 0 && x + j * pdy < OLED_WIDTH && y - j * pdx >= 0 && y - j * pdx < OLED_HEIGHT)
 						SH1106_DrawPixel(x + j * pdy, y - j * pdx, color);
 
-					if (x - j * pdy >= 0 && x - j * pdy <= OLED_WIDTH && y + j * pdx >= 0 && y + j * pdx <= OLED_HEIGHT)
+					if (x - j * pdy >= 0 && x - j * pdy < OLED_WIDTH && y + j * pdx >= 0 && y + j * pdx < OLED_HEIGHT)
 						SH1106_DrawPixel(x - j * pdy, y + j * pdx, color);
 				}
 			}
 		}
 	}
 
-	if (update_screen)
-		SH1106_UpdateScreen();
+	if (enable_screen_update && update_screen) SH1106_WriteBufferChanges(x1, y1, x2, y2, erase_last_write);
 	return 1;
 }
 
-
-void SH1106_WriteCharsPageMode(char *chars, size_t size, FONT_INFO font, int8_t start_page)
-{
-	uint32_t horizontal_pos = 2;	// starts from 2, because first 2 columns aren't visible
-	uint8_t separation = font.height / 2;
-	if (separation == 0)
-		separation = 1;
-
-	uint8_t space_character_width = separation * 2;
-	uint32_t char_position = 0;
-	uint32_t char_width = 0;
-
-	ram_page = (start_page == -1) ? font.height - 1 : start_page;	// font.height is in pages, no need to convert
-
-	// estimation of text width
-	if (font.descriptors[chars[0] - font.start_char].width * size >= OLED_WIDTH)
-		separation = 0;
-
-	for (uint32_t k = 0; k < size; k++)
-	{
-		if (chars[k] - font.start_char > font.end_char - font.start_char)
-			continue;
-		char_position = font.descriptors[chars[k] - font.start_char].offset;
-		char_width = font.descriptors[chars[k] - font.start_char].width;
-
-		if (chars[k] == ' ')
-		{
-			if (horizontal_pos + space_character_width >= OLED_WIDTH)
-				break;	// index would go past the end of the array, so stop the execution
-
-			for (uint32_t j = 0; j < font.height; j++)
-			{
-				for (uint32_t i = 0; i < space_character_width; i++)
-					SH1106_Buffer[ram_page - j][i + horizontal_pos] = 0x00;
-			}
-
-			horizontal_pos += space_character_width;
-			continue;
-		}
-
-		if (horizontal_pos + char_width + (k == size - 1) ? 0 : separation >= OLED_WIDTH)
-			break;	// index would go past the end of the array, so stop the execution
-
-		for (uint32_t j = 0; j < font.height; j++)
-		{
-			for (uint32_t i = 0; i < char_width; i++)
-				SH1106_Buffer[ram_page - j][i + horizontal_pos] = font.bitmaps[i * font.height + j + char_position];
-
-			// if it's the last character, it's useless putting a separator
-			if (k == size - 1)
-				continue;
-
-			for (uint32_t i = 0; i < separation; i++)
-				SH1106_Buffer[ram_page - j][i + horizontal_pos + char_width] = 0x00;
-		}
-		if (k == size - 1)
-			separation = 0;	// if it's the last character, there's no separator
-		horizontal_pos += char_width + separation * 2;
-	}
-
-	SH1106_UpdateScreen();
-}
-
-
-void SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_INFO font)
+// erase_last_write is ignored if SH1106_SetScreenAutoUpdate(false) has been called before
+uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_INFO font, bool erase_last_write)
 {
 	uint8_t cur_x = x;	// SH1106_DrawPixel() already increments x by 2
 	uint8_t cur_y = y;
-	uint8_t separation = font.height / 2;
-	uint8_t space_character_width = separation * 2;
 	uint32_t char_position = 0;
 	uint32_t char_width = 0;
+	uint8_t start_y = y;
+	uint8_t max_x = 0;
+	uint8_t separator_character_width = font.height / 2;
 
-	// estimation of text width
-	if (font.descriptors[chars[0] - font.start_char].width * size >= OLED_WIDTH)
-		separation = 0;
+	if (!enable_high_speed && erase_last_write)
+		SH1106_DrawRect(last_text_data.start_x, last_text_data.start_y, last_text_data.end_x - last_text_data.start_x, last_text_data.end_y -last_text_data.start_y, BLACK, 0, 0);
 
 	for (uint32_t k = 0; k < size; k++)
 	{
-		if (chars[k] == ' ')
+		if (k + 1 < size && chars[k] == '\n')
 		{
-			if (cur_x + space_character_width > OLED_WIDTH)
-				break;
+			// new line
+			cur_x = x;
+			y += font.height * 8;
+			cur_y = y;
+			continue;
+		}
 
-			for (uint32_t i = 0; i < space_character_width; i++)
+		if (chars[k] < 32) // checks if it's an actual character
+			continue;
+
+		if (chars[k] != ' ')
+		{
+			// checks if character exists in the font provided
+			if (chars[k] - font.start_char > font.end_char - font.start_char)
+				continue;
+
+			char_position = font.descriptors[chars[k] - font.start_char].offset;
+			char_width = font.descriptors[chars[k] - font.start_char].width;
+
+			// checks whether the character will go out of bounds
+			// if yes, add a new line and write the remaining characters
+			if ((cur_x + char_width + ((k == size - 1) ? 0 : separator_character_width)) > OLED_WIDTH - 4)
+			{
+				cur_x = x;
+				y += font.height * 8;
+				if (y + font.height * 8 > OLED_HEIGHT)
+					break;
+				cur_y = y;
+			}
+			// catches any weird, negative widths
+			else if ((cur_x + char_width + (k == size - 1) ? 0 : separator_character_width) < 0)
+				continue;
+
+			for (uint32_t i = 0; i < char_width; i++)
 			{
 				for (uint32_t j = 0; j < font.height; j++)
 				{
-					SH1106_DrawPixel(cur_x, cur_y, BLACK);
-					cur_y++;
+					uint8_t col_page_data = font.bitmaps[char_position + i * font.height + font.height - 1 - j];
+					for (uint32_t h = 0; h < 8; h++)
+					{
+						if (col_page_data >> h & 0x01)
+						{
+							if (cur_y > OLED_HEIGHT)
+								return 0;
+							SH1106_DrawPixel(cur_x, cur_y, BLUE);
+						}
+						cur_y++;
+					}
 				}
 				cur_x++;
+				if (cur_x > max_x)
+					max_x = cur_x;
 				cur_y = y;
 			}
-
-			continue;
 		}
 
-		if (chars[k] - font.start_char > font.end_char - font.start_char)
-			continue;
-		char_position = font.descriptors[chars[k] - font.start_char].offset;
-		char_width = font.descriptors[chars[k] - font.start_char].width;
+		// this point is reached if the character is a whitespace
 
-		// checks whether the character will go out of bounds
-		if (cur_x + char_width + (k == size - 1) ? 0 : separation > OLED_WIDTH)
-			break;
-
-		for (uint32_t i = 0; i < char_width; i++)
-		{
-			for (uint32_t j = 0; j < font.height; j++)
-			{
-				uint8_t col_page_data = font.bitmaps[char_position + i * font.height + font.height - 1 - j];
-				for (uint32_t h = 0; h < 8; h++)
-				{
-					if ((col_page_data >> h & 0x01) == 1)
-						SH1106_DrawPixel(cur_x, cur_y, BLUE);
-					cur_y++;
-				}
-			}
-			cur_x++;
-			cur_y = y;
-		}
-
-		// if it's the last character, it's useless putting a separator
+		// if it's the last character, it's useless putting a separator or whitespace
 		if (k == size - 1)
 			continue;
 
-		for (uint32_t i = 0; i < separation; i++)
+		uint8_t space_character_width = separator_character_width * 2;
+		uint8_t width_to_write = 0;
+
+		if (cur_x + space_character_width > OLED_WIDTH)
+			continue;
+
+		if (chars[k] == ' ')
+			width_to_write = space_character_width;
+		else
+			width_to_write = separator_character_width;
+
+		for (uint32_t i = 0; i < width_to_write; i++)
 		{
-			for (uint32_t j = 0; j < font.height * 8; j++)
+			for (uint32_t j = 0; j < font.height; j++)
 			{
 				SH1106_DrawPixel(cur_x, cur_y, BLACK);
 				cur_y++;
 			}
-			cur_y = y;
 			cur_x++;
+			if (cur_x > max_x)
+				max_x = cur_x;
+			cur_y = y;
 		}
 	}
 
-	SH1106_UpdateScreen();
+	if (enable_screen_update) SH1106_WriteBufferChanges(x, start_y, max_x, y + font.height * 8, erase_last_write);
+
+	return 1;
 }
 
 
-uint8_t SH1106_DrawBitmap(const uint8_t *bitmap, uint8_t x, uint8_t y, uint8_t width, uint8_t height)
+uint8_t SH1106_DrawBitmap(const uint8_t *bitmap, uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool erase_last_write)
 {
 	if (x < 0 || y < 0 || x + width > OLED_WIDTH || y + height > OLED_HEIGHT)
 		return 0;
@@ -363,30 +492,34 @@ uint8_t SH1106_DrawBitmap(const uint8_t *bitmap, uint8_t x, uint8_t y, uint8_t w
 			SH1106_DrawByte(x + j, y + i * 8, bitmap[j + width * i], BLUE);
 	}
 
-	SH1106_UpdateScreen();
+	if (enable_screen_update) SH1106_WriteBufferChanges(x, y, x + width, y + height, erase_last_write);
 	return 1;
 }
 
 
 void SH1106_Init(void)
 {
+	// https://www.displayfuture.com/Display/datasheet/controller/SH1106.pdf
 	SH1106_WriteCmdSingle(0xAE);		// display off
+	SH1106_WriteCmdDouble(0xAD, 0x8B);	// turn on DC-DC converter
 	SH1106_WriteCmdDouble(0xA8, 0x3F);	// multiplex ratio set to 64
 	SH1106_WriteCmdDouble(0xD3, 0x00);	// line offset from top of the display
-	SH1106_WriteCmdSingle(0x40 | 0x00);	// display start line (column)
+	SH1106_WriteCmdSingle(0x40 | 0x00);	// display start line (row)
 	SH1106_WriteCmdSingle(0xA1);		// segment re-map (x coordinate, A0 or A1)
 	SH1106_WriteCmdSingle(0xC8);		// output scan direction (y coordinate, left to right, C0 or C8)
 	SH1106_WriteCmdDouble(0xDA, 0x12);	// sequential COM pin configuration
-	uint8_t discharge = 0x00;
-	uint8_t precharge = 0x00;
-	SH1106_WriteCmdDouble(0x22, discharge | (precharge << 4));	// charge pump configuration
-	SH1106_WriteCmdDouble(0x81, 0x0F);	// contrast control. from 00 to FF
+	SH1106_WriteCmdSingle(0x31);		// set a lower charge pump voltage LOWEST: 0x30; HIGHEST: 0x33
+	SH1106_WriteCmdDouble(0x81, 0x3C);	// contrast control. from 00 to FF
 	SH1106_WriteCmdSingle(0xA4);		// enables RAM content to be displayed
-	SH1106_WriteCmdSingle(0x32);		// charge pump voltage
+	//SH1106_WriteCmdSingle(0x32);		// charge pump voltage
 	SH1106_WriteCmdSingle(0xA6);		// non-inverted display
 	SH1106_WriteCmdDouble(0xD5, 0xF0);	// display clock frequency (max)
-	SH1106_WriteCmdSingle(0xAF);		// display on
+	SH1106_WriteCmdSingle(0xAF);		// display on display on
 
-	HAL_Delay(250);
+	last_text_data.end_x = 0;
+	last_text_data.end_y = 0;
+	last_text_data.start_y = 0;
+
+	HAL_Delay(5);
 	SH1106_ClearScreen();
 }
