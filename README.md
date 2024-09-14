@@ -8,8 +8,8 @@ int main(void)
 {
   char text[] = "Hello World";
   SH1106_Init();
-  SH1106_DrawHollowRect(29, 23, 97, 41, 1, BLUE);
-  SH1106_WriteChars(32, 25, text, sizeof(text) - 1, Arial_12pt);
+  SH1106_DrawHollowRect(29, 23, 68, 18, 2, BLUE, 0);
+  SH1106_WriteChars(32, 25, text, sizeof(text), Arial_12pt, 0);
 }
 ```
 ![test](https://github.com/Kikkiu17/STM32_SH1106/blob/main/example_image.jpg?raw=true)
