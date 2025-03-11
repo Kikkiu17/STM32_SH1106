@@ -13,10 +13,19 @@
 #include "font.h"
 #include "string.h"
 
-#define DISPLAY_ADDR 0x78	// 0x3C << 1
-#define OLED_WIDTH 132		// screen is 128 pixels wide but RAM has 132 bytes
+
+#define DISPLAY_ADDR 0x3C << 1
+#define OLED_WIDTH 128		// SH1106 controller has a 132 byte wide RAM but only 128 pixels. if you're using SD1306, put 128
 #define OLED_HEIGHT 64
+#define BRIGHTNESS 0x10		// brightness (contrast): 0x00 -- 0xFF; 0x3C is medium brightness
+
+
 #define OLED_BUFFER_SIZE OLED_WIDTH * OLED_HEIGHT / 8
+#if OLED_WIDTH == 132
+#define WIDE_RAM_COMPENSATION 2	// pixels are shifted by 2 to the right in SH1106
+#elif OLED_WIDTH == 128
+#define WIDE_RAM_COMPENSATION 0
+#endif
 
 typedef uint8_t bool;
 #define true 1
@@ -30,15 +39,20 @@ typedef enum
 
 void SH1106_Init(void);
 uint8_t SH1106_DrawPixel(bool x, bool y, SH1106_COLOR color);
-uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, SH1106_COLOR color, bool erase_last_write, bool update_screen);
+uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, SH1106_COLOR color, bool erase_last_write);
 uint8_t SH1106_DrawHollowRect(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, SH1106_COLOR color, bool erase_last_write);
-uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, bool update_screen, SH1106_COLOR color, bool erase_last_write);
+uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, SH1106_COLOR color, bool erase_last_write);
+void SH1106_ScrollDown(uint8_t scroll_px);
+void SH1106_ScrollUp(uint8_t scroll_px);
 uint8_t SH1106_DrawBitmap(const uint8_t *bitmap, uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool erase_last_write);
 uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_INFO font, bool erase_last_write);
+uint32_t SH1106_GetTextWidth(char *chars, size_t size, FONT_INFO font);
+void leftPadding(char *dest, char* src, uint8_t desired_size, char fill_character);
 void SH1106_FillScreen(uint8_t color);
 void SH1106_ClearScreen(void);
 void SH1106_DisplayOFF(void);
 void SH1106_DisplayON(void);
+void SH1106_SetBrightness(uint8_t brightness);
 void SH1106_EnterSleepMode(void);
 void SH1106_ExitSleepMode(void);
 void SH1106_WriteBufferChanges(uint8_t start_x, uint8_t start_y, uint8_t end_x, uint8_t end_y, bool erase_last_write);

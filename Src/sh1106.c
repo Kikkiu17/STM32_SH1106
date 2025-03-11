@@ -72,9 +72,9 @@ void SH1106_WriteBufferChanges(uint8_t start_x, uint8_t start_y, uint8_t end_x, 
 		return;
 	else
 	{
-		// pixels in RAM are shifted left by 2
-		start_x += 2;
-		end_x += 2;
+		// pixels in RAM are shifted left by 2 in SH1106
+		start_x += WIDE_RAM_COMPENSATION;
+		end_x += WIDE_RAM_COMPENSATION;
 
 		const uint8_t start_y_page = start_y / 8;
 		const uint8_t end_y_page = end_y / 8;
@@ -180,6 +180,13 @@ void SH1106_DisplayON(void)
 }
 
 
+void SH1106_SetBrightness(uint8_t brightness)
+{
+	if (brightness >= 0 && brightness <= 255)
+		SH1106_WriteCmdDouble(0x81, brightness);
+}
+
+
 void SH1106_EnterSleepMode(void)
 {
 	SH1106_DisplayOFF();
@@ -204,14 +211,22 @@ void SH1106_SetScreenAutoUpdate(bool state)
 
 void SH1106_FillScreen(uint8_t color)
 {
-	SH1106_DrawRect(0, 0, 128, 64, color, 0, 0);
+	bool scr_update = false;
+	if (enable_screen_update)
+	{
+		SH1106_SetScreenAutoUpdate(false);
+		scr_update = true;
+	}
+	SH1106_DrawRect(0, 0, 128, 64, color, 0);
+	if (scr_update)
+		SH1106_SetScreenAutoUpdate(true);
 }
 
 
 // needs if (enable_screen_update) SH1106_WriteBufferChanges() after
 uint8_t SH1106_DrawPixel(uint8_t x, uint8_t y, SH1106_COLOR color)
 {
-	x += 2;
+	x += WIDE_RAM_COMPENSATION;
 	if (x >= OLED_WIDTH || y >= OLED_HEIGHT)
 		return 0;
 	if (color == BLUE)
@@ -234,20 +249,25 @@ uint8_t SH1106_DrawPixel(uint8_t x, uint8_t y, SH1106_COLOR color)
 
 uint8_t SH1106_DrawByte(uint8_t x, uint8_t y, uint8_t byte, SH1106_COLOR color)
 {
-	if (x < 0 || y < 0 || x > OLED_WIDTH || y > OLED_HEIGHT || y + 8 > OLED_HEIGHT)
+	if (x < 0 || y < 0)
 		return 0;
 
 	for (uint8_t i = 0; i < 8; i++)
 	{
 		if (byte >> i & 0x01)
+		{
+			if (x > OLED_WIDTH || y + i > OLED_HEIGHT)
+				break;
+
 			SH1106_DrawPixel(x, y + i, color);
+		}
 	}
 
 	return 1;
 }
 
 
-uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, SH1106_COLOR color, bool erase_last_write, bool update_screen)
+uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, SH1106_COLOR color, bool erase_last_write)
 {
 	if (x1 < 0 || width <= 0 || y1 < 0 || height <= 0)
 		return 0;
@@ -273,7 +293,7 @@ uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, S
 		pixel_x = x1;
 	}
 
-	if (enable_screen_update && update_screen) SH1106_WriteBufferChanges(x1, y1, x2, y2, erase_last_write);
+	if (enable_screen_update) SH1106_WriteBufferChanges(x1, y1, x2, y2, erase_last_write);
 	return 1;
 }
 
@@ -289,20 +309,31 @@ uint8_t SH1106_DrawHollowRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t hei
 	uint8_t x2 = x1 + width - 1;
 	uint8_t y2 = y1 + height - 1;
 
+	bool scr_update = false;
+
+	if (enable_screen_update)
+	{
+		SH1106_SetScreenAutoUpdate(false);
+		scr_update = true;
+	}
+
 	for (uint32_t i = 0; i < thickness; i++)
 	{
-		SH1106_DrawLine(x1, y1 + i, x2, y1 + i, 1, 0, color, 0);
-		SH1106_DrawLine(x1 + i, y1, x1 + i, y2, 1, 0, color, 0);
-		SH1106_DrawLine(x1, y2 - i, x2, y2 - i, 1, 0, color, 0);
-		SH1106_DrawLine(x2 - i, y1, x2 - i, y2, 1, 0, color, 0);
+		SH1106_DrawLine(x1, y1 + i, x2, y1 + i, 1, color, 0);
+		SH1106_DrawLine(x1 + i, y1, x1 + i, y2, 1, color, 0);
+		SH1106_DrawLine(x1, y2 - i, x2, y2 - i, 1, color, 0);
+		SH1106_DrawLine(x2 - i, y1, x2 - i, y2, 1, color, 0);
 	}
+
+	if (scr_update)
+		SH1106_SetScreenAutoUpdate(true);
 
 	if (enable_screen_update) SH1106_WriteBufferChanges(x1, y1, x2 + 1, y2 + 1, erase_last_write);
 	return 1;
 }
 
 
-uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, bool update_screen, SH1106_COLOR color, bool erase_last_write)
+uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, SH1106_COLOR color, bool erase_last_write)
 {
 	int8_t dx = abs(x2 - x1);
 	int8_t dy = abs(y2 - y1);
@@ -366,9 +397,43 @@ uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t 
 		}
 	}
 
-	if (enable_screen_update && update_screen) SH1106_WriteBufferChanges(x1, y1, x2, y2, erase_last_write);
+	if (enable_screen_update) SH1106_WriteBufferChanges(x1, y1, x2, y2, erase_last_write);
 	return 1;
 }
+
+
+uint32_t SH1106_GetTextWidth(char *chars, size_t size, FONT_INFO font)
+{
+	uint8_t separator_character_width = font.height / 2;
+	uint8_t space_character_width = font.height;
+	uint32_t total_width = 0;
+	for (uint32_t k = 0; k < size; k++)
+	{
+		if (chars[k] < 32) // checks if it's an actual character
+			continue;
+
+		if (chars[k] == ' ')
+		{
+			total_width += space_character_width;
+			continue;
+		}
+
+		// checks if character exists in the font provided
+		if (chars[k] - font.start_char > font.end_char - font.start_char)
+			continue;
+
+		total_width += font.descriptors[chars[k] - font.start_char].width;
+
+		// if it's the last character, it's useless putting a separator
+		if (k == size - 1)
+			continue;
+
+		total_width += separator_character_width;
+	}
+
+	return total_width;
+}
+
 
 // erase_last_write is ignored if SH1106_SetScreenAutoUpdate(false) has been called before
 uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_INFO font, bool erase_last_write)
@@ -382,7 +447,20 @@ uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_I
 	uint8_t separator_character_width = font.height / 2;
 
 	if (!enable_high_speed && erase_last_write)
-		SH1106_DrawRect(last_text_data.start_x, last_text_data.start_y, last_text_data.end_x - last_text_data.start_x, last_text_data.end_y -last_text_data.start_y, BLACK, 0, 0);
+	{
+		bool scr_update = false;
+
+		if (enable_screen_update)
+		{
+			SH1106_SetScreenAutoUpdate(false);
+			scr_update = true;
+		}
+
+		SH1106_DrawRect(last_text_data.start_x, last_text_data.start_y, last_text_data.end_x - last_text_data.start_x, last_text_data.end_y -last_text_data.start_y, BLACK, 0);
+
+		if (scr_update)
+			SH1106_SetScreenAutoUpdate(true);
+	}
 
 	for (uint32_t k = 0; k < size; k++)
 	{
@@ -394,6 +472,9 @@ uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_I
 			cur_y = y;
 			continue;
 		}
+
+		if (chars[k] == '\0')
+			return 0;
 
 		if (chars[k] < 32) // checks if it's an actual character
 			continue;
@@ -417,6 +498,7 @@ uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_I
 					break;
 				cur_y = y;
 			}
+
 			// catches any weird, negative widths
 			else if ((cur_x + char_width + (k == size - 1) ? 0 : separator_character_width) < 0)
 				continue;
@@ -481,15 +563,63 @@ uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_I
 }
 
 
+void SH1106_ScrollDown(uint8_t scroll_px)
+{
+	if (OLED_HEIGHT != 64)
+		return;
+	for (uint32_t k = 0; k < OLED_WIDTH; k++)
+	{
+		uint64_t all_pages = 0x0000000000000000;
+
+		for (uint32_t i = 0; i < 8; i++)
+			all_pages |= (uint64_t)SH1106_Buffer[7 - i][k] << (56 - i * 8);
+
+		all_pages = all_pages << (uint64_t)scroll_px;
+
+		for (uint32_t i = 0; i < 8; i++)
+			SH1106_Buffer[7 - i][k] = (uint8_t)(all_pages >> (56 - i * 8));
+	}
+}
+
+
+void SH1106_ScrollUp(uint8_t scroll_px)
+{
+	if (OLED_HEIGHT != 64)
+		return;
+	for (uint32_t k = 0; k < OLED_WIDTH; k++)
+	{
+		uint64_t all_pages = 0x0000000000000000;
+
+		for (uint32_t i = 0; i < 8; i++)
+			all_pages |= (uint64_t)SH1106_Buffer[7 - i][k] << (56 - i * 8);
+
+		all_pages = all_pages >> (uint64_t)scroll_px;
+
+		for (uint32_t i = 0; i < 8; i++)
+			SH1106_Buffer[7 - i][k] = (uint8_t)(all_pages >> (56 - i * 8));
+	}
+}
+
+
 uint8_t SH1106_DrawBitmap(const uint8_t *bitmap, uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool erase_last_write)
 {
-	if (x < 0 || y < 0 || x + width > OLED_WIDTH || y + height > OLED_HEIGHT)
+	if (x < 0 || y < 0)
 		return 0;
 
-	for (uint32_t i = 0; i < height / 8; i++)
+	uint8_t h = height / 8;
+	uint8_t hmod = height % 8;
+	if (hmod != 0)
+		h += 1;
+
+	for (uint32_t i = 0; i < h; i++)
 	{
 		for (uint32_t j = 0; j < width; j++)
-			SH1106_DrawByte(x + j, y + i * 8, bitmap[j + width * i], BLUE);
+		{
+			if (j + width * i < width * height)
+				SH1106_DrawByte(x + j, y + i * 8, bitmap[j + width * i], BLUE);
+			else
+				SH1106_DrawByte(x + j, y + i * 8, 0, BLUE);
+		}
 	}
 
 	if (enable_screen_update) SH1106_WriteBufferChanges(x, y, x + width, y + height, erase_last_write);
@@ -497,21 +627,44 @@ uint8_t SH1106_DrawBitmap(const uint8_t *bitmap, uint8_t x, uint8_t y, uint8_t w
 }
 
 
+void leftPadding(char *dest, char* src, uint8_t desired_size, char fill_character)
+{
+	uint32_t str_len = strlen(src);
+	memset(dest, 0, desired_size);
+	if (str_len == desired_size)
+	{
+		strcpy(dest, src);
+		return;
+	}
+
+	if (str_len > desired_size)
+	{
+		strncpy(dest, src, desired_size);
+	}
+	else
+	{
+		for (uint32_t i = 0; i < desired_size - str_len; i++)
+			dest[i] = fill_character;
+		strcat(dest, src);
+	}
+}
+
+
 void SH1106_Init(void)
 {
 	// https://www.displayfuture.com/Display/datasheet/controller/SH1106.pdf
+	HAL_Delay(100);
 	SH1106_WriteCmdSingle(0xAE);		// display off
-	SH1106_WriteCmdDouble(0xAD, 0x8B);	// turn on DC-DC converter
+	SH1106_WriteCmdDouble(0x8D, 0x14);	// turn on DC-DC converter
 	SH1106_WriteCmdDouble(0xA8, 0x3F);	// multiplex ratio set to 64
 	SH1106_WriteCmdDouble(0xD3, 0x00);	// line offset from top of the display
 	SH1106_WriteCmdSingle(0x40 | 0x00);	// display start line (row)
 	SH1106_WriteCmdSingle(0xA1);		// segment re-map (x coordinate, A0 or A1)
 	SH1106_WriteCmdSingle(0xC8);		// output scan direction (y coordinate, left to right, C0 or C8)
 	SH1106_WriteCmdDouble(0xDA, 0x12);	// sequential COM pin configuration
-	SH1106_WriteCmdSingle(0x31);		// set a lower charge pump voltage LOWEST: 0x30; HIGHEST: 0x33
-	SH1106_WriteCmdDouble(0x81, 0x3C);	// contrast control. from 00 to FF
+	SH1106_WriteCmdSingle(0x31);		// charge pump voltage - set a lower charge pump voltage LOWEST: 0x30; HIGHEST: 0x33
+	SH1106_WriteCmdDouble(0x81, BRIGHTNESS);	// contrast control. from 00 to FF
 	SH1106_WriteCmdSingle(0xA4);		// enables RAM content to be displayed
-	//SH1106_WriteCmdSingle(0x32);		// charge pump voltage
 	SH1106_WriteCmdSingle(0xA6);		// non-inverted display
 	SH1106_WriteCmdDouble(0xD5, 0xF0);	// display clock frequency (max)
 	SH1106_WriteCmdSingle(0xAF);		// display on display on
