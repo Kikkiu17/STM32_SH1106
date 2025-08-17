@@ -92,7 +92,7 @@ void SH1106_ExitSleepMode(void)
 /*//////////////////////////// GRAPHICS FUNCTIONS \\\\\\\\\\\\\\\\\\\\\\\\\\\\*/
 void SH1106_FillScreen(uint8_t color)
 {
-	SH1106_DrawRect(0, 0, 128, 64, color, 0);
+	SH1106_DrawRect(0, 0, 128, 64, color);
 }
 
 
@@ -130,7 +130,7 @@ uint8_t SH1106_DrawByte(uint8_t x, uint8_t y, uint8_t byte, SH1106_COLOR color)
 }
 
 
-uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, SH1106_COLOR color, bool erase_last_write)
+uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, SH1106_COLOR color)
 {
 	if (x1 < 0 || width <= 0 || y1 < 0 || height <= 0)
 		return 0;
@@ -157,7 +157,7 @@ uint8_t SH1106_DrawRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, S
 }
 
 
-uint8_t SH1106_DrawHollowRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, uint8_t thickness, SH1106_COLOR color, bool erase_last_write)
+uint8_t SH1106_DrawHollowRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t height, uint8_t thickness, SH1106_COLOR color)
 {
 	if (x1 < 0 || width <= 0 || y1 < 0 || height <= 0 || thickness <= 0)
 		return 0;
@@ -170,17 +170,17 @@ uint8_t SH1106_DrawHollowRect(uint8_t x1, uint8_t y1, uint8_t width, uint8_t hei
 
 	for (uint32_t i = 0; i < thickness; i++)
 	{
-		SH1106_DrawLine(x1, y1 + i, x2, y1 + i, 1, color, 0);
-		SH1106_DrawLine(x1 + i, y1, x1 + i, y2, 1, color, 0);
-		SH1106_DrawLine(x1, y2 - i, x2, y2 - i, 1, color, 0);
-		SH1106_DrawLine(x2 - i, y1, x2 - i, y2, 1, color, 0);
+		SH1106_DrawLine(x1, y1 + i, x2, y1 + i, 1, color);
+		SH1106_DrawLine(x1 + i, y1, x1 + i, y2, 1, color);
+		SH1106_DrawLine(x1, y2 - i, x2, y2 - i, 1, color);
+		SH1106_DrawLine(x2 - i, y1, x2 - i, y2, 1, color);
 	}
 
 	return 1;
 }
 
 
-uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, SH1106_COLOR color, bool erase_last_write)
+uint8_t SH1106_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t thickness, SH1106_COLOR color)
 {
 	int8_t dx = abs(x2 - x1);
 	int8_t dy = abs(y2 - y1);
@@ -282,7 +282,7 @@ uint32_t SH1106_GetTextWidth(char *chars, size_t size, FONT_INFO font)
 
 
 // erase_last_write is ignored if SH1106_SetScreenAutoUpdate(false) has been called before
-uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_INFO font, bool erase_last_write)
+uint8_t SH1106_WriteChars(uint8_t x, uint8_t y, char *chars, size_t size, FONT_INFO font)
 {
 	uint8_t cur_x = x;	// SH1106_DrawPixel() already increments x by 2
 	uint8_t cur_y = y;
@@ -428,7 +428,7 @@ void SH1106_ScrollUp(uint8_t scroll_px)
 }
 
 
-uint8_t SH1106_DrawBitmap(const uint8_t *bitmap, uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool erase_last_write)
+uint8_t SH1106_DrawBitmap(const uint8_t *bitmap, uint8_t x, uint8_t y, uint8_t width, uint8_t height)
 {
 	if (x < 0 || y < 0)
 		return 0;
