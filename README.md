@@ -10,6 +10,7 @@ int main(void)
   SH1106_Init();
   SH1106_DrawHollowRect(29, 23, 68, 18, 2, BLUE, 0);
   SH1106_WriteChars(32, 25, text, sizeof(text), Arial_12pt, 0);
+  SH1106_UpdateScreen();
 }
 ```
 ![test](https://github.com/Kikkiu17/STM32_SH1106/blob/main/example_image.jpg?raw=true)
