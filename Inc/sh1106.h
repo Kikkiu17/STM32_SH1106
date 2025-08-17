@@ -13,12 +13,15 @@
 #include "font.h"
 #include "string.h"
 
+#include "stm32f1xx_hal.h"
+
+#define SCREEN_I2C hi2c1
+#define I2C_DELAY 100
 
 #define DISPLAY_ADDR 0x3C << 1
 #define OLED_WIDTH 128		// SH1106 controller has a 132 byte wide RAM but only 128 pixels. if you're using SD1306, put 128
 #define OLED_HEIGHT 64
 #define BRIGHTNESS 0x10		// brightness (contrast): 0x00 -- 0xFF; 0x3C is medium brightness
-
 
 #define OLED_BUFFER_SIZE OLED_WIDTH * OLED_HEIGHT / 8
 #if OLED_WIDTH == 132
@@ -55,9 +58,6 @@ void SH1106_DisplayON(void);
 void SH1106_SetBrightness(uint8_t brightness);
 void SH1106_EnterSleepMode(void);
 void SH1106_ExitSleepMode(void);
-void SH1106_WriteBufferChanges(uint8_t start_x, uint8_t start_y, uint8_t end_x, uint8_t end_y, bool erase_last_write);
-void SH1106_UpdateEntireFrame(void);
-void SH1106_SetScreenAutoUpdate(bool);
-void SH1106_SetHighSpeedUpdate(bool);
+void SH1106_UpdateScreen(void);
 
 #endif /* INC_SH1106_H_ */
